@@ -9,6 +9,7 @@ import folium
 from folium.plugins import HeatMap
 import branca.colormap as cm
 import os
+import math
 from datetime import datetime
 
 class WeatherMapVisualizer:
@@ -62,6 +63,91 @@ class WeatherMapVisualizer:
         """
         
         return popup_html
+    
+    def calculate_distance(self, lat1, lon1, lat2, lon2):
+        """使用 Haversine 公式計算兩點間的距離"""
+        R = 6371000  # 地球半徑（米）
+        
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        delta_lat = math.radians(lat2 - lat1)
+        delta_lon = math.radians(lon2 - lon1)
+        
+        a = (math.sin(delta_lat/2)**2 + 
+             math.cos(lat1_rad) * math.cos(lat2_rad) * 
+             math.sin(delta_lon/2)**2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        
+        return R * c
+    
+    def find_nearest_and_farthest_pairs(self, df, max_pairs=5):
+        """找出最近和最遠的測站對"""
+        distances = []
+        
+        # 計算所有測站對的距離（為了效率，只計算前50個測站）
+        sample_df = df.head(50)
+        
+        for i in range(len(sample_df)):
+            for j in range(i + 1, len(sample_df)):
+                station1 = sample_df.iloc[i]
+                station2 = sample_df.iloc[j]
+                
+                distance_m = self.calculate_distance(
+                    station1['latitude'], station1['longitude'],
+                    station2['latitude'], station2['longitude']
+                )
+                
+                distances.append({
+                    'station1': station1,
+                    'station2': station2,
+                    'distance_km': distance_m / 1000,
+                    'distance_m': distance_m
+                })
+        
+        # 按距離排序
+        distances.sort(key=lambda x: x['distance_km'])
+        
+        return {
+            'nearest': distances[:max_pairs],
+            'farthest': distances[-max_pairs:]
+        }
+    
+    def add_distance_lines(self, map_obj, distance_pairs, line_color, line_weight=3):
+        """在地圖上添加距離連線"""
+        for pair in distance_pairs:
+            station1 = pair['station1']
+            station2 = pair['station2']
+            
+            # 創建連線
+            line = folium.PolyLine(
+                locations=[
+                    [station1['latitude'], station1['longitude']],
+                    [station2['latitude'], station2['longitude']]
+                ],
+                color=line_color,
+                weight=line_weight,
+                opacity=0.7,
+                popup=f"<b>{station1['station_name']} - {station2['station_name']}</b><br>"
+                      f"距離: {pair['distance_km']:.3f} km"
+            )
+            line.add_to(map_obj)
+            
+            # 在中點添加距離標籤
+            mid_lat = (station1['latitude'] + station2['latitude']) / 2
+            mid_lon = (station1['longitude'] + station2['longitude']) / 2
+            
+            distance_label = folium.Marker(
+                location=[mid_lat, mid_lon],
+                icon=folium.DivIcon(
+                    html=f'<div style="font-size: 11px; font-weight: bold; color: {line_color}; '
+                         f'background-color: white; padding: 2px 4px; border-radius: 3px; '
+                         f'border: 1px solid {line_color};">'
+                         f'{pair["distance_km"]:.2f}km</div>',
+                    icon_size=(80, 20),
+                    icon_anchor=(40, 10)
+                )
+            )
+            distance_label.add_to(map_obj)
     
     def create_weather_map(self, csv_file, output_file=None):
         """建立氣象地圖"""
@@ -140,17 +226,34 @@ class WeatherMapVisualizer:
             
             icon.add_to(m)
         
+        # 新增：計算並顯示測站距離
+        print("計算測站距離...")
+        distance_pairs = self.find_nearest_and_farthest_pairs(valid_df)
+        
+        print("添加距離連線到地圖...")
+        # 添加最近的測站對連線（綠色）
+        self.add_distance_lines(m, distance_pairs['nearest'], 'green', 3)
+        
+        # 添加最遠的測站對連線（紅色）
+        self.add_distance_lines(m, distance_pairs['farthest'], 'red', 3)
+        
+        print(f"已添加 {len(distance_pairs['nearest'])} 條最近距離連線")
+        print(f"已添加 {len(distance_pairs['farthest'])} 條最遠距離連線")
+        
         # 加入統計資訊
         stats_html = f"""
         <div style="position: fixed; 
-                    bottom: 50px; left: 50px; width: 200px; height: 120px; 
+                    bottom: 50px; left: 50px; width: 250px; height: 160px; 
                     background-color: white; border:2px solid grey; z-index:9999; 
-                    font-size:14px; padding: 10px">
-        <h4 style="margin: 0 0 10px 0;">氣溫分佈統計</h4>
+                    font-size:14px; padding: 10px;
+                    box-shadow: 3px 3px 3px rgba(0,0,0,0.3);">
+        <h4 style="margin: 0 0 10px 0;">氣象站地圖圖例</h4>
         <p style="margin: 5px 0;"><span style="color: #0000FF;">●</span> 低溫 (&lt;20°C): {temp_stats['cold']}</p>
         <p style="margin: 5px 0;"><span style="color: #00FF00;">●</span> 適中 (20-28°C): {temp_stats['normal']}</p>
         <p style="margin: 5px 0;"><span style="color: #FFA500;">●</span> 高溫 (&gt;28°C): {temp_stats['hot']}</p>
         <p style="margin: 5px 0;"><span style="color: #808080;">●</span> 無資料: {temp_stats['no_data']}</p>
+        <p style="margin: 5px 0;"><span style="color: green;">━</span> 最近測站對</p>
+        <p style="margin: 5px 0;"><span style="color: red;">━</span> 最遠測站對</p>
         </div>
         """
         

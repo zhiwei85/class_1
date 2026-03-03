@@ -15,13 +15,16 @@ def debug_api_response():
     """調試 API 回應格式"""
     api_key = os.getenv('CWA_API_KEY')
     url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/O-A0003-001"
-    params = {
+    headers = {
         'Authorization': api_key,
+        'Accept': 'application/json'
+    }
+    params = {
         'format': 'JSON'
     }
     
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
         
